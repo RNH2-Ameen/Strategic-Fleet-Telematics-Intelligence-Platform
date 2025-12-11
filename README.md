@@ -1,19 +1,3 @@
-# :earth_americas: GDP dashboard template
+This project is a Production-Grade Data Dashboard built using Streamlit and Pandas to transform raw fleet telematics data (start/end kilometers) into actionable business intelligence. It provides fleet managers with a real-time view of asset utilization, estimated operational costs, maintenance risk, and geographic distribution.
 
-A simple Streamlit app showing the GDP of different countries in the world.
-
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://gdp-dashboard-template.streamlit.app/)
-
-### How to run it on your own machine
-
-1. Install the requirements
-
-   ```
-   $ pip install -r requirements.txt
-   ```
-
-2. Run the app
-
-   ```
-   $ streamlit run streamlit_app.py
-   ```
+The application emphasizes data robustness and strategic decision support, enabling quick identification of unused capital and high-risk assets.
