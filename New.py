@@ -76,6 +76,12 @@ def load_and_clean_data(file):
         
         df.columns = df.columns.str.strip()
         
+        # Validation
+        required_columns = ['Grouping', 'Engine hours', 'Boom Operation time']
+        if not all(col in df.columns for col in required_columns):
+            st.error(f"⚠️ Column Error: The uploaded file is missing one of these required columns: {required_columns}")
+            st.stop()
+
         col_map = {
             'Grouping': 'Date', 'Engine hours': 'Engine_Raw', 
             'Boom Operation time': 'Work_Raw', 'Utilization %': 'Util_Pct'
@@ -89,7 +95,7 @@ def load_and_clean_data(file):
         df['Engine_Hours'] = df['Engine_Raw'].apply(time_to_hours)
         df['Work_Hours'] = df['Work_Raw'].apply(time_to_hours)
         
-        # LOGIC: Idle = Total Engine ON - Productive Boom Time
+        # LOGIC
         df['Idle_Hours'] = df['Engine_Hours'] - df['Work_Hours']
         df['Idle_Hours'] = df['Idle_Hours'].clip(lower=0)
         
@@ -126,7 +132,7 @@ with st.sidebar:
             options=date_options,
             default=['Select All']
         )
-
+        
     st.divider()
     st.markdown("### 🎯 KPI Thresholds")
     
@@ -196,18 +202,20 @@ if uploaded_file:
 
     # --- ROW 1: TREND ---
     col_trend, col_pie = st.columns([2, 1])
-    
+    config = {'displayModeBar': False}
+
     with col_trend:
         st.subheader("📈 Efficiency Trend")
         if len(df) > 1:
             fig_trend = go.Figure()
+            # STYLE CHANGE: 'spline' for smooth curves
             fig_trend.add_trace(go.Scatter(
                 x=df['Date'], y=df['Utilization'],
                 mode='lines+markers',
                 name='Efficiency',
-                line=dict(color='#00C853', width=3),
-                marker=dict(size=8, color='#00C853', line=dict(width=1, color='white')), 
-                fill='tozeroy', fillcolor='rgba(0, 200, 83, 0.1)'
+                line=dict(color='#00C853', width=3, shape='spline'), # <--- Spline for curves
+                marker=dict(size=6, color='#00C853', line=dict(width=2, color='white')), 
+                fill='tozeroy', fillcolor='rgba(0, 200, 83, 0.05)' # Lighter fill
             ))
             fig_trend.add_hline(
                 y=target_util, line_dash="dash", line_color="#FF1744", line_width=2,
@@ -231,7 +239,7 @@ if uploaded_file:
                 yaxis=dict(range=[0, 110], showgrid=True, gridcolor='#f0f0f0'),
                 plot_bgcolor="white", hovermode="x unified"
             )
-            st.plotly_chart(fig_trend, use_container_width=True)
+            st.plotly_chart(fig_trend, use_container_width=True, config=config)
         else:
             st.info("Select multiple days to see a trend line.")
 
@@ -241,10 +249,17 @@ if uploaded_file:
             'Category': ['Boom Active (Good)', 'Idle (Waste)'],
             'Hours': [total_work, total_idle]
         })
-        fig_pie = px.pie(pie_data, names='Category', values='Hours', hole=0.5,
+        # STYLE CHANGE: Donut chart with center text
+        fig_pie = px.pie(pie_data, names='Category', values='Hours', hole=0.7,
                          color='Category',
                          color_discrete_map={'Boom Active (Good)':'#00C853', 'Idle (Waste)':'#FF1744'})
-        st.plotly_chart(fig_pie, use_container_width=True)
+        
+        # Add center annotation
+        fig_pie.add_annotation(text=f"{total_engine:,.0f}h", showarrow=False, font_size=20, x=0.5, y=0.5)
+        fig_pie.add_annotation(text="Total", showarrow=False, font_size=12, x=0.5, y=0.4)
+        
+        fig_pie.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.1))
+        st.plotly_chart(fig_pie, use_container_width=True, config=config)
 
     # --- ROW 2: DETECTIVE ---
     st.subheader("🕵️ The Waste Detective")
@@ -259,9 +274,11 @@ if uploaded_file:
     ))
     fig_stack.update_layout(
         barmode='stack', height=400, yaxis_title="Total Hours",
-        hovermode="x unified", legend=dict(orientation="h", y=1.1)
+        hovermode="x unified", legend=dict(orientation="h", y=1.1),
+        plot_bgcolor='white', # Cleaner background
+        xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#f0f0f0')
     )
-    st.plotly_chart(fig_stack, use_container_width=True)
+    st.plotly_chart(fig_stack, use_container_width=True, config=config)
 
     # --- ROW 3: PERFORMANCE LOG ---
     st.subheader("📋 Performance Log")
@@ -312,13 +329,11 @@ if uploaded_file:
     st.subheader("🔮 Next Month's Planner")
     
     # Calculate Recommendations
-    # Filter out low usage days (< 1 hour) to get "Real" operational data
     real_days = df[df['Engine_Hours'] > 1.0]
     
     if len(real_days) > 0:
         avg_eff = real_days['Utilization'].mean()
         best_eff = real_days['Utilization'].max()
-        # 75th Percentile = A realistic "Stretch Goal" (Better than average, but achieved by top 25% of days)
         recommended_goal = real_days['Utilization'].quantile(0.75)
         
         c_plan1, c_plan2 = st.columns([3, 1])
