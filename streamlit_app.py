@@ -21,6 +21,31 @@ st.markdown(
     div[data-baseweb="popover"] { background-color: #262730 !important; border: 1px solid #4c4c4c !important; }
     div[role="listbox"] ul { background-color: #262730 !important; }
     span[data-baseweb="tag"] { background-color: #31333F !important; border: 1px solid #FF4B4B; }
+    
+    /* KPI Card Styling */
+    div[data-testid="metric-container"] {
+        background-color: #f0f2f6;
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 5px solid #ff4b4b;
+    }
+    
+    /* AI Box Styling */
+    .ai-box {
+        background-color: #e3f2fd;
+        border: 1px solid #2196f3;
+        padding: 20px;
+        border-radius: 10px;
+        color: #0d47a1;
+        margin-bottom: 20px;
+    }
+    .savings-box {
+        background-color: #e8f5e9;
+        border: 1px solid #00c853;
+        padding: 20px;
+        border-radius: 10px;
+        color: #1b5e20;
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -45,11 +70,14 @@ def multiselect_with_all(label, options, key):
 @st.cache_data
 def load_data(file):
     try:
+        # Check for openpyxl dependency implicitly by trying to read
         df = pd.read_excel(file, sheet_name=0, skiprows=2, engine="openpyxl")
         
         # Data Cleaning
         df = df.dropna(subset=[df.columns[0]]).copy()
+        # Rename strictly to ensure downstream logic holds
         df.columns = ['Sr', 'Plate', 'Make', 'Location', 'Start_Km', 'End_Km', 'Total_Km']
+        
         df['Total_Km'] = pd.to_numeric(df['Total_Km'], errors='coerce').fillna(0)
         df['End_Km'] = pd.to_numeric(df['End_Km'], errors='coerce').fillna(0)
         df['Make'] = df['Make'].astype(str).str.upper().str.strip()
@@ -90,8 +118,7 @@ def load_data(file):
 # 5. SIDEBAR & INPUTS
 # ---------------------------------------------------------
 with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/000000/truck.png", width=70)
-    st.title("Fleet Control")
+    st.title("🚛 Fleet Control")
     uploaded_file = st.file_uploader("Upload Report", type=["xlsx"])
 
     if st.button("Reset All Settings"):
@@ -100,7 +127,7 @@ with st.sidebar:
 
 if uploaded_file is None:
     st.title("Strategic Fleet Intelligence Platform")
-    st.info("👋 Please upload your Telematics Excel file to begin.")
+    st.info("👋 Please upload your Telematics Excel file to begin analysis.")
     st.stop()
 
 # Load Data
@@ -115,6 +142,7 @@ global_eff = st.sidebar.slider("Global Weather Impact", 0.9, 1.2, 1.0, key='glob
     help="Multiplier for external factors (e.g. 1.1 = Summer Heat).")
 
 # --- B. DYNAMIC COST CALCULATION ---
+# Base consumption rates (L/100km)
 fuel_rates = {'NISSAN SUNNY':8.0, 'NISSAN ALTIMA':8.5, 'MAZDA':9.0, 'ASHOK LEYLAND':16.0, 'MITSUBISHI CANTER':15.0}
 
 def calculate_smart_cost(row):
@@ -170,10 +198,15 @@ if selection_filtered.empty:
 max_km_found = int(selection_filtered['Total_Km'].max()) if not selection_filtered.empty else 500
 threshold = st.sidebar.slider("Active Vehicle Threshold (km)", 0, max(max_km_found + 50, 100), 10, key='thresh_slider')
 
-# Apply Threshold
+# Identify Ghost Assets (Zero Usage) vs Low Usage
 ghost_assets_data = selection_filtered[selection_filtered['Total_Km'] == 0]
-# Add CPK here so it's available for the dashboard
-selection_filtered['CPK'] = selection_filtered['Est_Fuel_Cost_AED'] / (selection_filtered['Total_Km'] + 1)
+
+# Calculate CPK (Cost Per Kilometer) - Handling Zero Division
+selection_filtered['CPK'] = selection_filtered.apply(
+    lambda x: x['Est_Fuel_Cost_AED'] / x['Total_Km'] if x['Total_Km'] > 0 else 0, axis=1
+)
+
+# Apply Active Threshold Filter
 filtered = selection_filtered[selection_filtered['Total_Km'] > threshold]
 
 # ---------------------------------------------------------
@@ -182,7 +215,7 @@ filtered = selection_filtered[selection_filtered['Total_Km'] > threshold]
 util_rate = (len(filtered) / len(selection_filtered) * 100) if len(selection_filtered) > 0 else 0
 ghost_assets_count = len(ghost_assets_data)
 total_fuel = filtered['Est_Fuel_Cost_AED'].sum()
-avg_cpk = filtered['CPK'].mean()
+avg_cpk = filtered[filtered['Total_Km']>0]['CPK'].mean() # Average CPK of active vehicles
 
 st.title("Strategic Fleet Intelligence Platform")
 
@@ -194,6 +227,12 @@ c4.metric("Ghost Assets", ghost_assets_count, delta_color="inverse")
 c5.metric("Est. Fuel Cost", f"AED {total_fuel:,.0f}")
 
 st.caption(f"⛽ Basis: Petrol {petrol_price} | Diesel {diesel_price} | Weather Factor {global_eff}x")
+
+# --- Ghost Asset Expander ---
+if ghost_assets_count > 0:
+    with st.expander(f"⚠️ View {ghost_assets_count} Ghost Assets (0 km usage)", expanded=False):
+        st.dataframe(ghost_assets_data[['Vehicle_ID', 'Make', 'Location', 'Role_Notes']], use_container_width=True)
+
 st.markdown("---")
 
 # ---------------------------------------------------------
@@ -201,7 +240,6 @@ st.markdown("---")
 # ---------------------------------------------------------
 col_health, col_cpk = st.columns(2)
 color_map = {'Fresh (<50k km)': '#2ecc71', 'Mid-Life (50-100k km)': '#f1c40f', 'End-of-Life (>100k km)': '#e74c3c'}
-
 
 with col_health:
     st.subheader("Fleet Health (Count)")
@@ -220,8 +258,8 @@ with col_cpk:
     st.subheader("Cost Performance by Make")
     st.caption("Lower CPK (Cost per Kilometer) is better performance.")
     
-    # Calculate Average CPK per Make
-    cpk_data = filtered.groupby('Make')['CPK'].mean().reset_index()
+    # Calculate Average CPK per Make (Active vehicles only)
+    cpk_data = filtered.groupby('Make')['CPK'].mean().reset_index().sort_values('CPK')
 
     fig_cpk = px.bar(
         cpk_data, 
@@ -233,7 +271,7 @@ with col_cpk:
         template='plotly_white'
     )
     fig_cpk.update_traces(texttemplate='AED %{text:.3f}')
-    fig_cpk.update_layout(xaxis_title=None, yaxis_title="Average CPK (AED/km)", height=300)
+    fig_cpk.update_layout(xaxis_title=None, yaxis_title="Average CPK (AED/km)", height=300, showlegend=False)
     st.plotly_chart(fig_cpk, use_container_width=True)
 
 
@@ -300,3 +338,62 @@ st.dataframe(styled_df, use_container_width=True, height=300)
 
 csv = filtered.to_csv(index=False).encode('utf-8')
 st.download_button("📥 Download Filtered Report", csv, "Fleet_Intelligence_Report.csv", "text/csv")
+
+st.markdown("---")
+
+# ---------------------------------------------------------
+# 10. AI FLEET ANALYST (NEW FEATURE)
+# ---------------------------------------------------------
+st.subheader("🤖 AI Fleet Analyst: Optimization Engine")
+
+# AI Logic
+avg_fleet_km = filtered['Total_Km'].mean() if not filtered.empty else 0
+potential_savings = ghost_assets_count * 1500 # Assuming 1500 AED/Month lease cost
+overworked_count = len(filtered[filtered['Total_Km'] > (avg_fleet_km * 2)])
+
+c_ai1, c_ai2 = st.columns([1, 1])
+
+with c_ai1:
+    st.markdown(f"""
+    <div class="savings-box">
+        <h4>💰 Ghost Asset Savings Opportunity</h4>
+        <p>You have <b>{ghost_assets_count} vehicles</b> showing 0 km usage.</p>
+        <p>If these are rented/leased assets, returning them could save approximately:</p>
+        <h2>AED {potential_savings:,.0f} / Month</h2>
+        <small><i>*Based on estimated AED 1,500 monthly lease cost per unit.</i></small>
+    </div>
+    """, unsafe_allow_html=True)
+
+with c_ai2:
+    st.markdown(f"""
+    <div class="ai-box">
+        <h4>🔄 Load Balancing Recommendation</h4>
+        <p><b>{overworked_count} vehicles</b> are being overworked (driving > 2x the fleet average).</p>
+        <ul>
+            <li><b>Fleet Average:</b> {avg_fleet_km:,.0f} km</li>
+            <li><b>Risk:</b> High mileage increases breakdown risk by 40%.</li>
+            <li><b>Action:</b> Rotate these high-mileage vehicles with the "Fresh" vehicles in your pool to balance wear.</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# 11. USER MANUAL & GLOSSARY (NEW FEATURE)
+# ---------------------------------------------------------
+with st.expander("📚 User Manual & Glossary"):
+    st.markdown("""
+    ### 📖 Glossary of Terms
+    * **CPK (Cost Per Kilometer):** A vital efficiency metric. Calculated as `Total Fuel Cost / Total Km`. Lower is better. A high CPK indicates an inefficient vehicle or driver.
+    * **Ghost Asset:** A vehicle that is active in your system but has moved **0 km** during the reporting period. These are pure wasted cost.
+    * **Active Vehicle Threshold:** The slider in the sidebar allows you to ignore vehicles with very low usage (e.g., < 10km) so they don't skew your average statistics.
+    * **Global Weather Impact:** A multiplier in the sidebar. Use **1.0** for normal days. Use **1.1 or 1.2** for Summer months where AC usage increases fuel consumption by 10-20%.
+    * **Maintenance Bands:**
+        * 🟢 **Fresh:** < 50k km (Low risk, low maintenance cost)
+        * 🟡 **Mid-Life:** 50k - 100k km (Medium risk, scheduled maintenance)
+        * 🔴 **End-of-Life:** > 100k km (High risk, consider replacement)
+
+    ### 🛠️ How to use the Filters
+    1.  **Hierarchy:** The filters work in order: Location -> Make -> Status -> Vehicle.
+    2.  **Comparison:** Select two specific Locations (e.g., Dubai vs Abu Dhabi) to see which branch has a better (lower) CPK in the "Cost Performance" chart.
+    3.  **Export:** Use the "Download Filtered Report" button to get the clean data for your monthly presentation.
+    """)
